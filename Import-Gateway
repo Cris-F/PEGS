@@ -1,0 +1,224 @@
+https://github.com/Mixa84/komodo/wiki/Side-chain-setup-(Import-Gateway-CC)
+
+
+
+Side chain setup (Import Gateway CC)
+
+     
+      Mihailo Milenkovic edited this page 5 days ago
+      ·
+      
+        1 revision
+      
+Intro
+Creating side chain for a coin is able on Komodo asset chains using 
+import gateway CC. The external coin can be any bitcoin protocol chain 
+(you cannot use ETH or any other coins which is not on bitcoin protocol 
+for now). It works by locking coins on external chain in a multi 
+signature address (it can be a normal address with single private key 
+but then this would not be decentralized and trust woud be in a single 
+point which can be corrupt) and giving the same amount of coins in asset
+ chain. So now you can operate on this side chain, use all of the 
+features in Komodo ecosystem and when you don't want to be on side chain
+ anymore you can withdraw the amount of coins you have and get them back
+ in original chain. In all examples here I will use KMD chain as 
+external chain for which we will create side chain. Everything can be 
+created using TUI (text UI) which is faster but in this wiki I will 
+explain how to do it manually.
+
+
+
+Initial steps
+There are steps that needs to be done to prepare your nodes for the 
+setup. They are not all necessary to be done before but usually I forgot
+ some of them so the best time is to do it in the beginning. You will 
+need N nodes which have to run both external chain nodes and AC nodes.
+
+
+
+Compile in test mode
+If you want to test how side chain works, you need to compile all 
+nodes in test mode so that you do not need to wait long for tx 
+confirmations or to have notarization enabled on your AC chain. You need
+ to do the following before build:
+
+
+export CONFIGURE_FLAGS='CPPFLAGS=-DTESTMODE'
+
+
+./zcutil/build.sh
+
+
+
+Create chain
+To create a chain that will use import gateway CC you must supply following ac parameters: -ac_import=<external_coin_name> -ac_supply=<initial_supply_necessary_for_setup> -ac_reward=1 -ac_end=1 -ac_perc=0.
+ Initial supply of coins will be given to node which is started with 
+-gen=1 and you will use those coins to setup oracle and import gateway. 
+After that the rest can be burnt (sent to unspendable address) if you 
+want.
+
+
+komodod -ac_name=KMDSIDECHAIN -ac_cc=2 -ac_import=KMD -ac_supply=100 -ac_reward=1 -ac_end=1 -ac_perc=0
+
+
+
+Sync external chain node
+On the nodes which will be in charge of deposit and withdraw and sign
+ the multi signature address they must have both external chain node and
+ AC node running. You need to have fully synced external chain.
+
+
+
+Import private keys from asset chain to external chain for withdrawal to work
+After creating a AC and syncing external chain, you need to dump the 
+private keys of AC signing nodes and import them to external chain 
+nodes.
+
+
+komodo-cli -ac_name=KMDSIDECHAIN dumpprivkey "nodes_pubkey_address"
+
+
+komodo-cli importprivkey "private_key "label" false
+
+
+
+Setup
+
+Oracle
+You need to create a oracle for submitting external chain block data.
+ Oracle must have the same name as external coin (in this example KMD), 
+and Ihh format.
+
+
+komodo-cli -ac_name=KMDSIDECHAIN oraclescreate KMD kmd_block_data Ihh
+
+
+On all signing nodes you must register as publisher with data fee and
+ subscribe on your self to be able to post block data. Data fee can be 
+whatever as publishers get paid from subscribe a data fee, but as you 
+will subscribe on your self it will pay you from your subscribe (usually
+ I use 10k sat). It is recommended to do more than one subscribe as it 
+will dictate how many external block data you can submit in each AC 
+block. Also subscribe with enough amount to be able to pay yourself (I 
+usualy subscribe in few coins on 10k sat data fee)
+
+
+komodo-cli -ac_name=KMDSIDECHAIN oraclesfund <oraclescreate_txid>
+
+
+komodo-cli -ac_name=KMDSIDECHAIN oraclesregister <oraclescreate_txid> 10000
+
+
+komodo-cli -ac_name=KMDSIDECHAIN oraclessubscribe <oraclescreate_txid> <publishers_pubkey> 10
+
+
+...
+
+
+komodo-cli -ac_name=KMDSIDECHAIN oraclessubscribe <oraclescreate_txid> <publishers_pubkey> 10
+
+
+
+Import gateway bind
+Now it is time to create a import gateway. You need to supply 
+external coin name (and it needs to match oracles name too), oracles 
+create txid, then you need to define MofN multi signature type, supply 
+all N pubkeys and supply pubkey, p2sh and wif types.
+
+
+komodo-cli -ac_name=KMDSIDECHAIN importgateway KMD <oraclescreate_txid> 2 3 <pubkey1> ... <pubkeyN> 60 85 188
+
+
+
+Run chain with earlytxid
+Now that we have import gateway created, we need to start the nodes with -earlytxid
+ parameter in order to have only one valid importgateway that can 
+operate on chain. Imagine if we don't do this and allow everybody to 
+create it's own import gateway and issue coins on chain and they make 
+1of1 gateway so they can steal your deposit.
+NOTE: all these steps must be done before block 100 as earlytxid will not accept importgatewaybind tx after block 100
+
+
+komodo-cli -ac_name=KMDSIDECHAIN -ac_cc=2 -ac_import=KMD 
+-ac_supply=100 -ac_reward=1 -ac_end=1 -ac_perc=0 
+-earlytxid=<importgatewaybind_txid>
+
+
+
+Run oraclefeed dapps
+Lets now run oraclefeed dapp on every node of N created nodes. Compile oraclefeed from komoodo source:
+
+
+gcc cc/dapps/oraclefeed.c -lm -o oraclefeed -g
+
+
+You need to supply coin name, oracle txid, node pubkey, oracle format and importgatwaybind on each node.
+
+
+oraclefeed KMD <oraclescreate_txid> <node_pubkey> Ihh <importgatewaybind_txid>
+
+
+NOTE: if external chain is not from Komodo ecosystem then you
+ need to additionally supply path to cli executable as last parameter to
+ oraclefeed
+
+
+
+Finish
+At this point the side chain should be properly configured. You can 
+test the deposit and withdraw of coins to make sure everything works
+
+
+
+Test deposit
+To deposit coins you must make a tx on external chain with sending 
+coins to import gateway deposit address along with a small amount as a 
+marker to address that belongs to pubkey that will receive deposited 
+coins on AC but in external chain address format. Check what is the 
+deposit address with komodo-cli -ac_name=KMDSIDECHAIN importgatewayinfo <importgatewaybind_txid> and to get the address for receivers pubkey use komodod -ac_name=KMDSIDECHAIN importgatewayexternaladdress <impotgatewaybind_txid> <pubkey>
+
+
+Now that you have all addresses needed use the rpc to send funds to 
+multiple addresses on external chain. In our example we will deposit KMD
+ to get KMDSIDECHAIN coins:
+
+
+komodo-cli z_sendmany 
+"address_where_KMD_funds_are_currently_held" 
+'[{"address":"address_of_receiver_pubkey","amount":0.0001},{"address":"importgateway_deposit_address","amount":0.1}]'
+
+
+You need to wait the tx to be mined on external chain and take a note
+ of the tx block height. Next, we need to make sure that the block where
+ our deposit tx is enters into oracle of block data. You can check 
+latest 5 heights with:
+
+
+komodo-cli -ac_name=KMDSIDECHAIN oraclesinfo <oraclescreate_txid>
+
+
+komodo-cli -ac_name=KMDSIDECHAIN oraclessamples <oraclecreate_txid> <baton_address> 5
+
+
+If the height is greater than deposit height, or you see that height 
+in those 5 samples it means that it is submitted to oracle. Before we 
+can do importgatewaydeposit tx you must get some info that you will need
+ to supply to the tx. You will need raw hex of deposit tx and the proof:
+
+
+komodo-cli getrawtransaction <deposit_txid>
+
+
+komodo-cli gettxoutproof  '["<deposit_txid>"]'
+
+
+Now lets do the importgatewaydeposit:
+
+
+komodo-cli -ac_name=KMDSIDECHAIN importgatewaydeposit 
+<importgatewaybind_txid> <deposit_tx_height> KMD 
+<deposit_txid> 0 <raw_hex> <proof> 
+<receivers_pubkey> 0.1
+
+
+When the importgatewaydeposit tx is mined the receiver should receive the deposited amount in KMDSIDECHAIN coins.
